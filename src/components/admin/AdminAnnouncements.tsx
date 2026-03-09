@@ -1,9 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
+import { Trash2, Pencil, Plus } from "lucide-react";
 
 interface Announcement {
   id: string;
@@ -14,74 +20,108 @@ interface Announcement {
 }
 
 export const AdminAnnouncements = () => {
-  const [items, setItems] = useState<Announcement[]>([]);
-  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const [items, setItems] = useState<Announcement[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Announcement | null>(null);
+  const [title, setTitle] = useState("Aktuálně");
+  const [content, setContent] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const fetch = async () => {
     const { data } = await supabase.from("announcements").select("*").order("created_at", { ascending: false });
-    if (data) setItems(data as Announcement[]);
-    setLoading(false);
+    setItems((data as Announcement[]) ?? []);
   };
 
   useEffect(() => { fetch(); }, []);
 
-  const add = async () => {
-    const { error } = await supabase.from("announcements").insert({ title: "Nová aktualita", content: "Text aktuality..." });
-    if (error) { toast({ title: "Chyba", description: error.message, variant: "destructive" }); return; }
-    fetch();
+  const openNew = () => { setEditing(null); setTitle("Aktuálně"); setContent(""); setIsActive(true); setDialogOpen(true); };
+  const openEdit = (a: Announcement) => { setEditing(a); setTitle(a.title); setContent(a.content); setIsActive(a.is_active); setDialogOpen(true); };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (editing) {
+        const { error } = await supabase.from("announcements").update({ title, content, is_active: isActive }).eq("id", editing.id);
+        if (error) throw error;
+        toast({ title: "Aktualita aktualizována" });
+      } else {
+        const { error } = await supabase.from("announcements").insert({ title, content, is_active: isActive });
+        if (error) throw error;
+        toast({ title: "Aktualita přidána" });
+      }
+      setDialogOpen(false);
+      fetch();
+    } catch (err: any) {
+      toast({ title: "Chyba", description: err.message, variant: "destructive" });
+    }
+    setSaving(false);
   };
 
-  const update = async (id: string, updates: Partial<Announcement>) => {
-    const { error } = await supabase.from("announcements").update(updates).eq("id", id);
-    if (error) { toast({ title: "Chyba", description: error.message, variant: "destructive" }); return; }
-    toast({ title: "Uloženo" });
-    fetch();
-  };
-
-  const remove = async (id: string) => {
+  const handleDelete = async (id: string) => {
+    if (!confirm("Opravdu smazat?")) return;
     const { error } = await supabase.from("announcements").delete().eq("id", id);
-    if (error) { toast({ title: "Chyba", description: error.message, variant: "destructive" }); return; }
-    fetch();
+    if (error) toast({ title: "Chyba", description: error.message, variant: "destructive" });
+    else { toast({ title: "Smazáno" }); fetch(); }
   };
-
-  if (loading) return <p>Načítání...</p>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="font-heading font-bold text-xl">Aktuality ({items.length})</h2>
-        <Button onClick={add} className="gap-2"><Plus size={16} /> Přidat</Button>
+    <>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="font-heading font-bold text-xl text-foreground">Aktuality</h2>
+        <Button onClick={openNew} className="gap-2"><Plus size={16} /> Přidat aktualitu</Button>
       </div>
-      <div className="space-y-3">
-        {items.map((item) => (
-          <div key={item.id} className="bg-card rounded-lg card-shadow p-4 space-y-3">
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Titulek</TableHead>
+                <TableHead>Obsah</TableHead>
+                <TableHead>Aktivní</TableHead>
+                <TableHead className="text-right">Akce</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.length === 0 && (
+                <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-8">Žádné aktuality.</TableCell></TableRow>
+              )}
+              {items.map((a) => (
+                <TableRow key={a.id}>
+                  <TableCell className="font-medium">{a.title}</TableCell>
+                  <TableCell className="max-w-xs truncate text-muted-foreground">{a.content}</TableCell>
+                  <TableCell>
+                    <span className={`inline-block w-2 h-2 rounded-full ${a.is_active ? "bg-green-500" : "bg-muted-foreground"}`} />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(a)}><Pencil size={16} /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleDelete(a.id)}><Trash2 size={16} className="text-destructive" /></Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editing ? "Upravit aktualitu" : "Přidat aktualitu"}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2"><Label>Titulek</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+            <div className="space-y-2"><Label>Obsah</Label><Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={4} /></div>
             <div className="flex items-center gap-3">
-              <Input
-                defaultValue={item.title}
-                onBlur={(e) => { if (e.target.value !== item.title) update(item.id, { title: e.target.value }); }}
-                className="font-heading font-bold"
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => update(item.id, { is_active: !item.is_active })}
-                title={item.is_active ? "Aktivní" : "Neaktivní"}
-              >
-                {item.is_active ? <ToggleRight size={20} className="text-green-600" /> : <ToggleLeft size={20} className="text-muted-foreground" />}
-              </Button>
-              <Button variant="destructive" size="icon" onClick={() => remove(item.id)}>
-                <Trash2 size={16} />
-              </Button>
+              <Switch checked={isActive} onCheckedChange={setIsActive} />
+              <Label>Aktivní (zobrazuje se na webu)</Label>
             </div>
-            <textarea
-              defaultValue={item.content}
-              onBlur={(e) => { if (e.target.value !== item.content) update(item.id, { content: e.target.value }); }}
-              className="w-full bg-muted rounded-lg px-4 py-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-secondary/50 transition resize-none min-h-[80px]"
-            />
           </div>
-        ))}
-      </div>
-    </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>Zrušit</Button>
+            <Button onClick={handleSave} disabled={saving || !content.trim()}>{saving ? "Ukládání..." : "Uložit"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
