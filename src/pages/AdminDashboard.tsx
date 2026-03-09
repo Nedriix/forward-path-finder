@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LogOut, ArrowLeft, Car, Megaphone, DollarSign } from "lucide-react";
+import { LogOut, ArrowLeft, Car, Megaphone, DollarSign, ExternalLink } from "lucide-react";
 import { AdminVehicles } from "@/components/admin/AdminVehicles";
 import { AdminAnnouncements } from "@/components/admin/AdminAnnouncements";
 import { AdminPricing } from "@/components/admin/AdminPricing";
