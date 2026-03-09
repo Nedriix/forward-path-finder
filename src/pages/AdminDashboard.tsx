@@ -32,9 +32,16 @@ const AdminDashboard = () => {
             </Button>
             <h1 className="font-heading font-bold text-primary-foreground text-lg">Administrace</h1>
           </div>
-          <Button variant="ghost" onClick={() => signOut()} className="text-primary-foreground gap-2">
-            <LogOut size={16} /> Odhlásit
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" asChild className="text-primary-foreground gap-2">
+              <a href="/" target="_blank" rel="noopener noreferrer">
+                <ExternalLink size={16} /> Zobrazit web
+              </a>
+            </Button>
+            <Button variant="ghost" onClick={() => signOut()} className="text-primary-foreground gap-2">
+              <LogOut size={16} /> Odhlásit
+            </Button>
+          </div>
         </div>
       </header>
 
