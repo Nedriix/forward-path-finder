@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { Carousel, CarouselContent, CarouselItem, CarouselPrevious, CarouselNext } from "@/components/ui/carousel";
+
+interface VehiclePhoto {
+  id: string;
+  image_url: string;
+  sort_order: number;
+}
 
 interface Vehicle {
   id: string;
@@ -7,6 +14,7 @@ interface Vehicle {
   name: string;
   image_url: string | null;
   sort_order: number;
+  photos: VehiclePhoto[];
 }
 
 const categoryLabels: Record<string, string> = {
@@ -35,26 +43,73 @@ const fallbackFleet: Record<string, string[]> = {
   T: ["ZETOR 5211"],
 };
 
+const VehiclePhotos = ({ photos }: { photos: VehiclePhoto[] }) => {
+  if (photos.length === 0) return null;
+
+  if (photos.length === 1) {
+    return (
+      <img
+        src={photos[0].image_url}
+        alt=""
+        className="w-full h-48 object-cover rounded-lg"
+      />
+    );
+  }
+
+  return (
+    <Carousel className="w-full">
+      <CarouselContent>
+        {photos.map((photo) => (
+          <CarouselItem key={photo.id}>
+            <img
+              src={photo.image_url}
+              alt=""
+              className="w-full h-48 object-cover rounded-lg"
+            />
+          </CarouselItem>
+        ))}
+      </CarouselContent>
+      <CarouselPrevious className="-left-3 h-7 w-7" />
+      <CarouselNext className="-right-3 h-7 w-7" />
+    </Carousel>
+  );
+};
+
 const FleetSection = () => {
   const [vehiclesByCategory, setVehiclesByCategory] = useState<Record<string, Vehicle[]>>({});
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    supabase
-      .from("vehicles")
-      .select("*")
-      .order("sort_order")
-      .then(({ data }) => {
-        if (data && data.length > 0) {
-          const grouped: Record<string, Vehicle[]> = {};
-          (data as Vehicle[]).forEach((v) => {
-            if (!grouped[v.category]) grouped[v.category] = [];
-            grouped[v.category].push(v);
-          });
-          setVehiclesByCategory(grouped);
-        }
-        setLoaded(true);
+    const fetchData = async () => {
+      const [vehiclesRes, photosRes] = await Promise.all([
+        supabase.from("vehicles").select("*").order("sort_order"),
+        supabase.from("vehicle_photos").select("*").order("sort_order"),
+      ]);
+
+      const vehicles = (vehiclesRes.data ?? []) as Omit<Vehicle, "photos">[];
+      const photos = (photosRes.data ?? []) as (VehiclePhoto & { vehicle_id: string })[];
+
+      const photosByVehicle: Record<string, VehiclePhoto[]> = {};
+      photos.forEach((p) => {
+        if (!photosByVehicle[p.vehicle_id]) photosByVehicle[p.vehicle_id] = [];
+        photosByVehicle[p.vehicle_id].push(p);
       });
+
+      if (vehicles.length > 0) {
+        const grouped: Record<string, Vehicle[]> = {};
+        vehicles.forEach((v) => {
+          const vehicleWithPhotos: Vehicle = {
+            ...v,
+            photos: photosByVehicle[v.id] ?? (v.image_url ? [{ id: "legacy", image_url: v.image_url, sort_order: 0 }] : []),
+          };
+          if (!grouped[v.category]) grouped[v.category] = [];
+          grouped[v.category].push(vehicleWithPhotos);
+        });
+        setVehiclesByCategory(grouped);
+      }
+      setLoaded(true);
+    };
+    fetchData();
   }, []);
 
   const hasDbData = Object.keys(vehiclesByCategory).length > 0;
@@ -73,24 +128,24 @@ const FleetSection = () => {
           {categoryOrder.map((cat) => {
             const vehicles = hasDbData ? vehiclesByCategory[cat] : undefined;
             const fallback = fallbackFleet[cat];
-            const items = vehicles ?? (fallback ? fallback.map((name, i) => ({ id: String(i), category: cat, name, image_url: null, sort_order: i })) : []);
+            const items = vehicles ?? (fallback ? fallback.map((name, i) => ({ id: String(i), category: cat, name, image_url: null, sort_order: i, photos: [] })) : []);
 
             if (items.length === 0) return null;
 
             return (
               <div key={cat} className={`bg-gradient-to-br ${categoryColors[cat]} bg-card rounded-2xl card-shadow p-6`}>
                 <h3 className="font-heading font-bold text-foreground mb-4 text-lg">{categoryLabels[cat]}</h3>
-                <ul className="space-y-3">
+                <div className="space-y-5">
                   {items.map((v) => (
-                    <li key={v.id} className="flex items-start gap-3">
-                      {v.image_url && (
-                        <img src={v.image_url} alt={v.name} className="w-16 h-12 object-cover rounded shrink-0" />
-                      )}
-                      {!v.image_url && <span className="w-1.5 h-1.5 rounded-full bg-secondary shrink-0 mt-2" />}
-                      <span className="text-sm text-muted-foreground">{v.name}</span>
-                    </li>
+                    <div key={v.id} className="space-y-2">
+                      <VehiclePhotos photos={v.photos} />
+                      <div className="flex items-center gap-2">
+                        {v.photos.length === 0 && <span className="w-1.5 h-1.5 rounded-full bg-secondary shrink-0" />}
+                        <span className="text-sm font-medium text-foreground">{v.name}</span>
+                      </div>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </div>
             );
           })}

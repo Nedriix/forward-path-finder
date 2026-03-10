@@ -8,7 +8,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2, Pencil, Plus, Upload, X } from "lucide-react";
+import { Trash2, Pencil, Plus, Upload, X, Image } from "lucide-react";
+
+interface VehiclePhoto {
+  id: string;
+  vehicle_id: string;
+  image_url: string;
+  sort_order: number;
+}
 
 interface Vehicle {
   id: string;
@@ -29,25 +36,53 @@ const CATEGORIES = [
 export const AdminVehicles = () => {
   const { toast } = useToast();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [photos, setPhotos] = useState<Record<string, VehiclePhoto[]>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [editingPhotos, setEditingPhotos] = useState<VehiclePhoto[]>([]);
   const [name, setName] = useState("");
   const [category, setCategory] = useState("B");
   const [sortOrder, setSortOrder] = useState(0);
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const fetchVehicles = async () => {
-    const { data } = await supabase.from("vehicles").select("*").order("category").order("sort_order");
-    setVehicles((data as Vehicle[]) ?? []);
+  const fetchData = async () => {
+    const [vRes, pRes] = await Promise.all([
+      supabase.from("vehicles").select("*").order("category").order("sort_order"),
+      supabase.from("vehicle_photos").select("*").order("sort_order"),
+    ]);
+    setVehicles((vRes.data as Vehicle[]) ?? []);
+    const grouped: Record<string, VehiclePhoto[]> = {};
+    ((pRes.data as VehiclePhoto[]) ?? []).forEach((p) => {
+      if (!grouped[p.vehicle_id]) grouped[p.vehicle_id] = [];
+      grouped[p.vehicle_id].push(p);
+    });
+    setPhotos(grouped);
   };
 
-  useEffect(() => { fetchVehicles(); }, []);
+  useEffect(() => { fetchData(); }, []);
 
-  const openNew = () => { setEditingVehicle(null); setName(""); setCategory("B"); setSortOrder(0); setImageFile(null); setDialogOpen(true); };
-  const openEdit = (v: Vehicle) => { setEditingVehicle(v); setName(v.name); setCategory(v.category); setSortOrder(v.sort_order); setImageFile(null); setDialogOpen(true); };
+  const openNew = () => {
+    setEditingVehicle(null);
+    setEditingPhotos([]);
+    setName("");
+    setCategory("B");
+    setSortOrder(0);
+    setNewFiles([]);
+    setDialogOpen(true);
+  };
 
-  const uploadImage = async (file: File): Promise<string> => {
+  const openEdit = (v: Vehicle) => {
+    setEditingVehicle(v);
+    setEditingPhotos(photos[v.id] ?? []);
+    setName(v.name);
+    setCategory(v.category);
+    setSortOrder(v.sort_order);
+    setNewFiles([]);
+    setDialogOpen(true);
+  };
+
+  const uploadFile = async (file: File): Promise<string> => {
     const ext = file.name.split(".").pop();
     const path = `${crypto.randomUUID()}.${ext}`;
     const { error } = await supabase.storage.from("vehicle-photos").upload(path, file);
@@ -55,16 +90,14 @@ export const AdminVehicles = () => {
     return supabase.storage.from("vehicle-photos").getPublicUrl(path).data.publicUrl;
   };
 
-  const removeImage = async () => {
-    if (!editingVehicle?.image_url) return;
+  const removePhoto = async (photo: VehiclePhoto) => {
     try {
-      const url = editingVehicle.image_url;
-      const path = url.split("/vehicle-photos/").pop();
+      const path = photo.image_url.split("/vehicle-photos/").pop();
       if (path) {
         await supabase.storage.from("vehicle-photos").remove([path]);
       }
-      await supabase.from("vehicles").update({ image_url: null }).eq("id", editingVehicle.id);
-      setEditingVehicle({ ...editingVehicle, image_url: null });
+      await supabase.from("vehicle_photos").delete().eq("id", photo.id);
+      setEditingPhotos((prev) => prev.filter((p) => p.id !== photo.id));
       toast({ title: "Fotka odstraněna" });
     } catch (err: any) {
       toast({ title: "Chyba", description: err.message, variant: "destructive" });
@@ -74,19 +107,37 @@ export const AdminVehicles = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      let image_url = editingVehicle?.image_url ?? null;
-      if (imageFile) image_url = await uploadImage(imageFile);
+      let vehicleId = editingVehicle?.id;
+
       if (editingVehicle) {
-        const { error } = await supabase.from("vehicles").update({ name, category, sort_order: sortOrder, image_url }).eq("id", editingVehicle.id);
+        const { error } = await supabase.from("vehicles").update({ name, category, sort_order: sortOrder }).eq("id", editingVehicle.id);
         if (error) throw error;
-        toast({ title: "Vozidlo aktualizováno" });
       } else {
-        const { error } = await supabase.from("vehicles").insert({ name, category, sort_order: sortOrder, image_url });
+        const { data, error } = await supabase.from("vehicles").insert({ name, category, sort_order: sortOrder }).select("id").single();
         if (error) throw error;
-        toast({ title: "Vozidlo přidáno" });
+        vehicleId = data.id;
       }
+
+      // Upload new files
+      if (newFiles.length > 0 && vehicleId) {
+        const maxOrder = editingPhotos.length > 0
+          ? Math.max(...editingPhotos.map((p) => p.sort_order)) + 1
+          : 0;
+
+        for (let i = 0; i < newFiles.length; i++) {
+          const url = await uploadFile(newFiles[i]);
+          const { error } = await supabase.from("vehicle_photos").insert({
+            vehicle_id: vehicleId,
+            image_url: url,
+            sort_order: maxOrder + i,
+          });
+          if (error) throw error;
+        }
+      }
+
+      toast({ title: editingVehicle ? "Vozidlo aktualizováno" : "Vozidlo přidáno" });
       setDialogOpen(false);
-      fetchVehicles();
+      fetchData();
     } catch (err: any) {
       toast({ title: "Chyba", description: err.message, variant: "destructive" });
     }
@@ -95,9 +146,25 @@ export const AdminVehicles = () => {
 
   const handleDelete = async (id: string) => {
     if (!confirm("Opravdu smazat?")) return;
+    // Photos will be cascade-deleted from DB, but we should also remove from storage
+    const vehiclePhotos = photos[id] ?? [];
+    for (const p of vehiclePhotos) {
+      const path = p.image_url.split("/vehicle-photos/").pop();
+      if (path) await supabase.storage.from("vehicle-photos").remove([path]);
+    }
     const { error } = await supabase.from("vehicles").delete().eq("id", id);
     if (error) toast({ title: "Chyba", description: error.message, variant: "destructive" });
-    else { toast({ title: "Smazáno" }); fetchVehicles(); }
+    else { toast({ title: "Smazáno" }); fetchData(); }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    setNewFiles((prev) => [...prev, ...files]);
+    e.target.value = "";
+  };
+
+  const removeNewFile = (index: number) => {
+    setNewFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -111,7 +178,7 @@ export const AdminVehicles = () => {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Fotka</TableHead>
+                <TableHead>Fotky</TableHead>
                 <TableHead>Název</TableHead>
                 <TableHead>Kategorie</TableHead>
                 <TableHead>Pořadí</TableHead>
@@ -122,27 +189,43 @@ export const AdminVehicles = () => {
               {vehicles.length === 0 && (
                 <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">Žádná vozidla.</TableCell></TableRow>
               )}
-              {vehicles.map((v) => (
-                <TableRow key={v.id}>
-                  <TableCell>
-                    {v.image_url ? <img src={v.image_url} alt={v.name} className="w-16 h-12 object-cover rounded" /> : <div className="w-16 h-12 bg-muted rounded flex items-center justify-center text-xs text-muted-foreground">—</div>}
-                  </TableCell>
-                  <TableCell className="font-medium">{v.name}</TableCell>
-                  <TableCell>{CATEGORIES.find((c) => c.value === v.category)?.label ?? v.category}</TableCell>
-                  <TableCell>{v.sort_order}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" onClick={() => openEdit(v)}><Pencil size={16} /></Button>
-                    <Button variant="ghost" size="icon" onClick={() => handleDelete(v.id)}><Trash2 size={16} className="text-destructive" /></Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {vehicles.map((v) => {
+                const vPhotos = photos[v.id] ?? [];
+                return (
+                  <TableRow key={v.id}>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        {vPhotos.length > 0 ? (
+                          <>
+                            <img src={vPhotos[0].image_url} alt={v.name} className="w-16 h-12 object-cover rounded" />
+                            {vPhotos.length > 1 && (
+                              <span className="flex items-center text-xs text-muted-foreground">+{vPhotos.length - 1}</span>
+                            )}
+                          </>
+                        ) : (
+                          <div className="w-16 h-12 bg-muted rounded flex items-center justify-center text-xs text-muted-foreground">
+                            <Image size={16} />
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-medium">{v.name}</TableCell>
+                    <TableCell>{CATEGORIES.find((c) => c.value === v.category)?.label ?? v.category}</TableCell>
+                    <TableCell>{v.sort_order}</TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon" onClick={() => openEdit(v)}><Pencil size={16} /></Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleDelete(v.id)}><Trash2 size={16} className="text-destructive" /></Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>{editingVehicle ? "Upravit vozidlo" : "Přidat vozidlo"}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2"><Label>Název</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="např. Toyota Yaris" /></div>
@@ -152,22 +235,44 @@ export const AdminVehicles = () => {
             </div>
             <div className="space-y-2"><Label>Pořadí</Label><Input type="number" value={sortOrder} onChange={(e) => setSortOrder(Number(e.target.value))} /></div>
             <div className="space-y-2">
-              <Label>Fotka</Label>
-              {editingVehicle?.image_url && !imageFile && (
-                <div className="relative w-24">
-                  <img src={editingVehicle.image_url} alt="" className="w-24 h-18 object-cover rounded" />
-                  <button
-                    type="button"
-                    onClick={removeImage}
-                    className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-0.5 hover:brightness-90 transition"
-                  >
-                    <X size={14} />
-                  </button>
+              <Label>Fotky</Label>
+              {/* Existing photos */}
+              {editingPhotos.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {editingPhotos.map((photo) => (
+                    <div key={photo.id} className="relative group">
+                      <img src={photo.image_url} alt="" className="w-full h-20 object-cover rounded" />
+                      <button
+                        type="button"
+                        onClick={() => removePhoto(photo)}
+                        className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-0.5 hover:brightness-90 transition opacity-0 group-hover:opacity-100"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* New files to upload */}
+              {newFiles.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {newFiles.map((file, i) => (
+                    <div key={i} className="relative group">
+                      <img src={URL.createObjectURL(file)} alt="" className="w-full h-20 object-cover rounded border-2 border-dashed border-primary/30" />
+                      <button
+                        type="button"
+                        onClick={() => removeNewFile(i)}
+                        className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-0.5 hover:brightness-90 transition opacity-0 group-hover:opacity-100"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               <label className="flex items-center gap-2 cursor-pointer border border-input rounded-md px-3 py-2 text-sm hover:bg-accent transition-colors w-fit">
-                <Upload size={16} />{imageFile ? imageFile.name : "Vybrat soubor"}
-                <input type="file" accept="image/*" className="hidden" onChange={(e) => setImageFile(e.target.files?.[0] ?? null)} />
+                <Upload size={16} /> Přidat fotky
+                <input type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} />
               </label>
             </div>
           </div>
